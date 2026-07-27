@@ -1,0 +1,1266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Air Canvas Engine - Zero-Drop Stable Tracking</title>
+  
+  <!-- MEDIAPIPE LIBRARIES VIA CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+  <style>
+    /* RESET & CORE STYLES */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100vh;
+      overflow: hidden;
+      background-color: #08080c;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: #e2e8f0;
+      user-select: none;
+    }
+
+    /* FULLSCREEN CANVAS */
+    #canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+      z-index: 1;
+      cursor: crosshair;
+    }
+
+    /* WEBCAM VIDEO (HIDDEN) */
+    #webcam {
+      display: none;
+    }
+
+    /* UI CONTAINER OVERLAY */
+    .ui-container {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 10;
+      pointer-events: none;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 24px;
+    }
+
+    /* TOP LEFT HUD PANEL */
+    .hud-panel {
+      pointer-events: auto;
+      background: rgba(12, 12, 20, 0.85);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 18px;
+      padding: 16px 22px;
+      width: fit-content;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .title-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #00f3ff;
+      box-shadow: 0 0 8px #00f3ff;
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0% { opacity: 0.5; transform: scale(0.9); }
+      50% { opacity: 1; transform: scale(1.1); }
+      100% { opacity: 0.5; transform: scale(0.9); }
+    }
+
+    .title-text h1 {
+      font-size: 1.05rem;
+      font-weight: 700;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      background: linear-gradient(135deg, #00f3ff 0%, #ff0055 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .title-text p {
+      font-size: 0.72rem;
+      color: #94a3b8;
+    }
+
+    .hud-stats-row {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-top: 4px;
+      font-size: 0.78rem;
+    }
+
+    .stat-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .stat-label {
+      color: #64748b;
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .stat-val {
+      font-family: monospace;
+      font-weight: 600;
+      color: #00f3ff;
+    }
+
+    /* TRACKING STATUS BADGES */
+    .track-badge {
+      font-family: monospace;
+      font-size: 0.7rem;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 6px;
+      text-transform: uppercase;
+    }
+
+    .track-tracked {
+      background: rgba(0, 255, 157, 0.2);
+      color: #00ff9d;
+      border: 1px solid rgba(0, 255, 157, 0.4);
+    }
+
+    .track-extrapolating {
+      background: rgba(255, 230, 0, 0.2);
+      color: #ffe600;
+      border: 1px solid rgba(255, 230, 0, 0.4);
+    }
+
+    .track-lost {
+      background: rgba(255, 0, 85, 0.2);
+      color: #ff0055;
+      border: 1px solid rgba(255, 0, 85, 0.4);
+    }
+
+    /* GESTURE MODE BADGES */
+    .mode-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      transition: all 0.2s ease;
+    }
+
+    .mode-drawing {
+      background: rgba(0, 243, 255, 0.2);
+      color: #00f3ff;
+      border: 1px solid rgba(0, 243, 255, 0.5);
+    }
+
+    .mode-erasing {
+      background: rgba(255, 0, 85, 0.2);
+      color: #ff0055;
+      border: 1px solid rgba(255, 0, 85, 0.5);
+    }
+
+    .mode-clearing {
+      background: rgba(255, 230, 0, 0.25);
+      color: #ffe600;
+      border: 1px solid rgba(255, 230, 0, 0.6);
+    }
+
+    .mode-hovering {
+      background: rgba(157, 0, 255, 0.2);
+      color: #9d00ff;
+      border: 1px solid rgba(157, 0, 255, 0.4);
+    }
+
+    .mode-searching {
+      background: rgba(100, 116, 139, 0.2);
+      color: #94a3b8;
+      border: 1px solid rgba(100, 116, 139, 0.3);
+    }
+
+    /* BOTTOM BAR & FLOATING CONTROL PANEL */
+    .bottom-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      width: 100%;
+    }
+
+    .gesture-guide {
+      pointer-events: auto;
+      background: rgba(12, 12, 20, 0.85);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 14px;
+      padding: 12px 18px;
+      font-size: 0.75rem;
+      color: #cbd5e1;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+    }
+
+    .guide-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .guide-icon {
+      font-size: 0.9rem;
+    }
+
+    .control-panel {
+      pointer-events: auto;
+      background: rgba(12, 12, 20, 0.85);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 20px;
+      padding: 20px;
+      width: 310px;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .panel-section-title {
+      font-size: 0.72rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #94a3b8;
+      margin-bottom: 6px;
+    }
+
+    /* COLOR PALETTE BUTTONS */
+    .color-palette {
+      display: flex;
+      gap: 10px;
+    }
+
+    .color-btn {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      border: 2px solid rgba(255, 255, 255, 0.2);
+      cursor: pointer;
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      position: relative;
+    }
+
+    .color-btn:hover {
+      transform: scale(1.15);
+    }
+
+    .color-btn.active {
+      transform: scale(1.2);
+      border-color: #ffffff;
+      box-shadow: 0 0 12px var(--btn-color);
+    }
+
+    /* SLIDERS */
+    .control-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .control-label-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.75rem;
+      color: #94a3b8;
+    }
+
+    .control-val {
+      font-family: monospace;
+      color: #00f3ff;
+    }
+
+    input[type="range"] {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      height: 4px;
+      background: rgba(255, 255, 255, 0.12);
+      border-radius: 2px;
+      outline: none;
+    }
+
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: #00f3ff;
+      cursor: pointer;
+      box-shadow: 0 0 8px #00f3ff;
+      transition: transform 0.1s ease;
+    }
+
+    /* ACTION BUTTONS */
+    .actions-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .btn {
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: #e2e8f0;
+      padding: 9px 12px;
+      border-radius: 10px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+
+    .btn:hover {
+      background: rgba(0, 243, 255, 0.15);
+      border-color: rgba(0, 243, 255, 0.4);
+      color: #00f3ff;
+    }
+
+    .btn-danger:hover {
+      background: rgba(255, 0, 85, 0.15);
+      border-color: rgba(255, 0, 85, 0.4);
+      color: #ff0055;
+    }
+
+    /* PERMISSION / START OVERLAY */
+    .start-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(8, 8, 12, 0.94);
+      backdrop-filter: blur(20px);
+      z-index: 100;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      gap: 20px;
+      text-align: center;
+      padding: 24px;
+      transition: opacity 0.3s ease, visibility 0.3s ease;
+    }
+
+    .start-overlay.hidden {
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+    }
+
+    .start-overlay h2 {
+      font-size: 2rem;
+      font-weight: 800;
+      background: linear-gradient(135deg, #00f3ff 0%, #ff0055 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+    }
+
+    .start-overlay p {
+      max-width: 480px;
+      color: #94a3b8;
+      font-size: 0.9rem;
+      line-height: 1.5;
+    }
+
+    .start-btn {
+      background: linear-gradient(135deg, #00f3ff 0%, #9d00ff 100%);
+      color: #fff;
+      border: none;
+      padding: 14px 32px;
+      border-radius: 30px;
+      font-size: 0.95rem;
+      font-weight: 700;
+      letter-spacing: 1px;
+      cursor: pointer;
+      box-shadow: 0 0 20px rgba(0, 243, 255, 0.4);
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .start-btn:hover {
+      transform: scale(1.05);
+      box-shadow: 0 0 30px rgba(0, 243, 255, 0.6);
+    }
+
+    @media (max-width: 640px) {
+      .ui-container { padding: 14px; }
+      .control-panel { width: 100%; max-width: 320px; }
+      .gesture-guide { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- WEBCAM INGEST (HIDDEN) -->
+  <video id="webcam" autoplay playsinline></video>
+
+  <!-- MAIN FULLSCREEN CANVAS -->
+  <canvas id="canvas"></canvas>
+
+  <!-- START / CAMERA PERMISSION OVERLAY -->
+  <div class="start-overlay" id="start-overlay">
+    <h2>AIR CANVAS ENGINE</h2>
+    <p>Zero-Drop Stable Hand Tracking & Real-Time Air Writing. Point 1 finger to Draw, 2 fingers to Hover cursor.</p>
+    <button class="start-btn" id="start-btn">ENABLE WEBCAM & START</button>
+  </div>
+
+  <!-- UI OVERLAY -->
+  <div class="ui-container">
+    <!-- TOP LEFT HUD PANEL -->
+    <div class="hud-panel">
+      <div class="title-row">
+        <div class="status-dot"></div>
+        <div class="title-text">
+          <h1>Air Canvas Engine</h1>
+          <p>3D Vector Scale-Invariant Tracking</p>
+        </div>
+      </div>
+
+      <div class="hud-stats-row">
+        <div class="stat-item">
+          <span class="stat-label">FPS</span>
+          <span class="stat-val" id="fps-val">--</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">Tracking</span>
+          <span class="track-badge track-lost" id="track-badge">LOST</span>
+        </div>
+        <div class="mode-badge mode-searching" id="mode-badge">SEARCHING HAND</div>
+      </div>
+    </div>
+
+    <!-- BOTTOM BAR & CONTROL PANEL -->
+    <div class="bottom-bar">
+      <!-- GESTURE QUICK GUIDE -->
+      <div class="gesture-guide">
+        <div class="guide-item">
+          <span class="guide-icon">☝️</span>
+          <span><b>1 Finger</b> Draw</span>
+        </div>
+        <span>&bull;</span>
+        <div class="guide-item">
+          <span class="guide-icon">✌️</span>
+          <span><b>2 Fingers</b> Hover</span>
+        </div>
+        <span>&bull;</span>
+        <div class="guide-item">
+          <span class="guide-icon">🤏</span>
+          <span><b>Pinch</b> Erase</span>
+        </div>
+        <span>&bull;</span>
+        <div class="guide-item">
+          <span class="guide-icon">🖐️</span>
+          <span><b>Open Palm</b> Clear (1.5s)</span>
+        </div>
+      </div>
+
+      <!-- FLOATING CONTROL PANEL -->
+      <div class="control-panel">
+        <div>
+          <div class="panel-section-title">Color Palette</div>
+          <div class="color-palette">
+            <button class="color-btn active" style="background:#00f3ff; --btn-color:#00f3ff;" data-color="#00f3ff" title="Cyber Cyan"></button>
+            <button class="color-btn" style="background:#ff0055; --btn-color:#ff0055;" data-color="#ff0055" title="Neon Pink"></button>
+            <button class="color-btn" style="background:#9d00ff; --btn-color:#9d00ff;" data-color="#9d00ff" title="Electric Purple"></button>
+            <button class="color-btn" style="background:#ffe600; --btn-color:#ffe600;" data-color="#ffe600" title="Solar Yellow"></button>
+          </div>
+        </div>
+
+        <div class="control-group">
+          <div class="control-label-row">
+            <span>Brush Size</span>
+            <span class="control-val" id="brush-val">8px</span>
+          </div>
+          <input type="range" id="brush-slider" min="2" max="24" step="1" value="8">
+        </div>
+
+        <div class="control-group">
+          <div class="control-label-row">
+            <span>Webcam Feed Opacity</span>
+            <span class="control-val" id="feed-val">30%</span>
+          </div>
+          <input type="range" id="feed-slider" min="0" max="100" step="5" value="30">
+        </div>
+
+        <div class="actions-row">
+          <button class="btn btn-danger" id="clear-btn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="3 6 5 6 21 6"></polyline>
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+            </svg>
+            Clear Canvas
+          </button>
+
+          <button class="btn" id="save-btn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="7 10 12 15 17 10"></polyline>
+              <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+            Save Art
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MAIN SCRIPT -->
+  <script>
+    /**
+     * ------------------------------------------------------------------------
+     * 1. CONFIGURATION & STATE
+     * ------------------------------------------------------------------------
+     */
+    const CONFIG = {
+      activeColor: '#00f3ff',
+      brushSize: 8,
+      webcamOpacity: 0.30,
+      eraserRadius: 40,
+      clearHoldTimeMs: 1500,
+      extrapolationLimit: 8
+    };
+
+    // Canvas elements & contexts
+    const mainCanvas = document.getElementById('canvas');
+    const mainCtx = mainCanvas.getContext('2d');
+
+    // Dedicated offscreen persistent artwork layer
+    const artCanvas = document.createElement('canvas');
+    const artCtx = artCanvas.getContext('2d');
+
+    // 640x480 offscreen video preprocessing canvas
+    const procCanvas = document.createElement('canvas');
+    procCanvas.width = 640;
+    procCanvas.height = 480;
+    const procCtx = procCanvas.getContext('2d');
+
+    // DOM Elements
+    const videoElement = document.getElementById('webcam');
+    const startOverlay = document.getElementById('start-overlay');
+    const startBtn = document.getElementById('start-btn');
+    const fpsVal = document.getElementById('fps-val');
+    const trackBadge = document.getElementById('track-badge');
+    const modeBadge = document.getElementById('mode-badge');
+    const brushSlider = document.getElementById('brush-slider');
+    const brushVal = document.getElementById('brush-val');
+    const feedSlider = document.getElementById('feed-slider');
+    const feedVal = document.getElementById('feed-val');
+    const clearBtn = document.getElementById('clear-btn');
+    const saveBtn = document.getElementById('save-btn');
+    const colorBtns = document.querySelectorAll('.color-btn');
+
+    // Smooth Trajectory & Extrapolation State
+    let smoothX = null;
+    let smoothY = null;
+    let rawX = null;
+    let rawY = null;
+    
+    let isDrawing = false;
+    let lastDrawX = null;
+    let lastDrawY = null;
+
+    // Velocity Buffer (Last 10 frames)
+    const velBuffer = [];
+    let lostFrames = 0;
+    let trackingState = 'LOST'; // 'TRACKED', 'EXTRAPOLATING', 'LOST'
+
+    // Gesture State
+    let currentMode = 'SEARCHING';
+    let clearTimerStart = null;
+    let clearProgress = 0;
+    let currentLandmarks = null;
+    let currentVideoImage = null;
+
+    // Particle Sparks Array
+    const particles = [];
+
+    // Performance FPS Counter
+    let lastFrameTime = performance.now();
+    let frameCount = 0;
+
+    /**
+     * ------------------------------------------------------------------------
+     * 2. CANVAS RESIZING
+     * ------------------------------------------------------------------------
+     */
+    function resizeCanvases() {
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+
+      mainCanvas.width = width;
+      mainCanvas.height = height;
+
+      // Preserve artwork on window resize
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = artCanvas.width || width;
+      tempCanvas.height = artCanvas.height || height;
+      const tempCtx = tempCanvas.getContext('2d');
+      tempCtx.drawImage(artCanvas, 0, 0);
+
+      artCanvas.width = width;
+      artCanvas.height = height;
+      artCtx.drawImage(tempCanvas, 0, 0);
+    }
+
+    window.addEventListener('resize', resizeCanvases);
+    resizeCanvases();
+
+    /**
+     * ------------------------------------------------------------------------
+     * 3. MEDIAPIPE HANDS SETUP & INFERENCE LOOP
+     * ------------------------------------------------------------------------
+     */
+    let hands = null;
+    let camera = null;
+
+    function initMediaPipe() {
+      hands = new Hands({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+      });
+
+      hands.setOptions({
+        maxNumHands: 1,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.4,
+        minTrackingConfidence: 0.4
+      });
+
+      hands.onResults(onHandResults);
+
+      camera = new Camera(videoElement, {
+        onFrame: async () => {
+          procCtx.save();
+          procCtx.filter = 'contrast(1.2) brightness(1.1)';
+          procCtx.drawImage(videoElement, 0, 0, 640, 480);
+          procCtx.restore();
+
+          await hands.send({ image: procCanvas });
+        },
+        width: 640,
+        height: 480
+      });
+    }
+
+    startBtn.addEventListener('click', async () => {
+      try {
+        startBtn.textContent = "INITIALIZING ENGINE...";
+        initMediaPipe();
+        await camera.start();
+        startOverlay.classList.add('hidden');
+      } catch (err) {
+        startOverlay.classList.add('hidden');
+        console.warn("Webcam unavailable, mouse/touch drawing enabled.", err);
+      }
+    });
+
+    /**
+     * ------------------------------------------------------------------------
+     * 4. 3D VECTOR MATH & INTUITIVE GESTURE SEPARATION
+     * ------------------------------------------------------------------------
+     */
+    function dist3D(p1, p2) {
+      const dx = p1.x - p2.x;
+      const dy = p1.y - p2.y;
+      const dz = (p1.z || 0) - (p2.z || 0);
+      return Math.sqrt(dx * dx + dy * dy + dz * dz);
+    }
+
+    function onHandResults(results) {
+      currentVideoImage = results.image;
+
+      if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
+        lostFrames++;
+        
+        if (lostFrames <= CONFIG.extrapolationLimit && smoothX !== null && velBuffer.length > 0) {
+          trackingState = 'EXTRAPOLATING';
+          
+          let avgVx = 0, avgVy = 0;
+          for (let i = 0; i < velBuffer.length; i++) {
+            avgVx += velBuffer[i].vx;
+            avgVy += velBuffer[i].vy;
+          }
+          avgVx /= velBuffer.length;
+          avgVy /= velBuffer.length;
+
+          smoothX += avgVx;
+          smoothY += avgVy;
+
+          if (isDrawing) {
+            processDrawingStroke(smoothX, smoothY);
+          }
+        } else {
+          trackingState = 'LOST';
+          currentMode = 'SEARCHING';
+          isDrawing = false;
+          lastDrawX = null;
+          lastDrawY = null;
+          clearTimerStart = null;
+          clearProgress = 0;
+          currentLandmarks = null;
+        }
+        return;
+      }
+
+      // Hand detected
+      lostFrames = 0;
+      trackingState = 'TRACKED';
+      currentLandmarks = results.multiHandLandmarks[0];
+
+      processGestureLogic(currentLandmarks);
+    }
+
+    function processGestureLogic(lm) {
+      const width = mainCanvas.width;
+      const height = mainCanvas.height;
+
+      // Mirrored horizontal coordinates
+      const indexTip = { x: (1 - lm[8].x) * width, y: lm[8].y * height, z: lm[8].z };
+      const indexPip = { x: (1 - lm[6].x) * width, y: lm[6].y * height, z: lm[6].z };
+      const wrist = { x: (1 - lm[0].x) * width, y: lm[0].y * height, z: lm[0].z };
+      const middleMcp = { x: (1 - lm[9].x) * width, y: lm[9].y * height, z: lm[9].z };
+
+      // Scale-Invariant Reference: Palm Scale (Wrist to Middle MCP distance)
+      const palmScale = dist3D(wrist, middleMcp);
+      if (palmScale === 0) return;
+
+      // Dynamic EMA Lerp Smoothing
+      const currentRawX = indexTip.x;
+      const currentRawY = indexTip.y;
+
+      if (rawX !== null && rawY !== null) {
+        const instVx = currentRawX - rawX;
+        const instVy = currentRawY - rawY;
+        velBuffer.push({ vx: instVx, vy: instVy });
+        if (velBuffer.length > 10) velBuffer.shift();
+      }
+
+      rawX = currentRawX;
+      rawY = currentRawY;
+
+      if (smoothX === null || smoothY === null) {
+        smoothX = rawX;
+        smoothY = rawY;
+      } else {
+        const speed = Math.hypot(velBuffer.length ? velBuffer[velBuffer.length - 1].vx : 0, velBuffer.length ? velBuffer[velBuffer.length - 1].vy : 0);
+        const alpha = Math.max(0.15, Math.min(0.75, 0.15 + speed * 0.02));
+        smoothX += alpha * (rawX - smoothX);
+        smoothY += alpha * (rawY - smoothY);
+      }
+
+      // Normalized tip distances relative to palmScale
+      const indexDistRel = dist3D(indexTip, wrist) / palmScale;
+      const middleDistRel = dist3D({ x: (1 - lm[12].x) * width, y: lm[12].y * height, z: lm[12].z }, wrist) / palmScale;
+      const ringDistRel = dist3D({ x: (1 - lm[16].x) * width, y: lm[16].y * height, z: lm[16].z }, wrist) / palmScale;
+      const pinkyDistRel = dist3D({ x: (1 - lm[20].x) * width, y: lm[20].y * height, z: lm[20].z }, wrist) / palmScale;
+
+      // Pinch distance Thumb Tip (4) to Index Tip (8)
+      const pinchDistRel = dist3D({ x: (1 - lm[4].x) * width, y: lm[4].y * height, z: lm[4].z }, indexTip) / palmScale;
+
+      // Finger Extension Checks
+      const isIndexExtended = (lm[8].y < lm[6].y) || (indexDistRel > 1.15);
+      const isMiddleExtended = (lm[12].y < lm[10].y) || (middleDistRel > 1.15);
+      const isRingExtended = (lm[16].y < lm[14].y) || (ringDistRel > 1.15);
+      const isPinkyExtended = (lm[20].y < lm[18].y) || (pinkyDistRel > 1.05);
+
+      // ----------------------------------------------------------------------
+      // GESTURE 1: CLEAR CANVAS (OPEN PALM - 4/5 fingers extended)
+      // ----------------------------------------------------------------------
+      if (isIndexExtended && isMiddleExtended && isRingExtended && isPinkyExtended && pinchDistRel > 0.40) {
+        if (!clearTimerStart) clearTimerStart = performance.now();
+        const elapsed = performance.now() - clearTimerStart;
+        clearProgress = Math.min(1.0, elapsed / CONFIG.clearHoldTimeMs);
+
+        currentMode = 'CLEARING';
+        if (clearProgress >= 1.0) {
+          artCtx.clearRect(0, 0, artCanvas.width, artCanvas.height);
+          clearTimerStart = null;
+          clearProgress = 0;
+        }
+        isDrawing = false;
+        lastDrawX = null;
+        lastDrawY = null;
+        return;
+      } else {
+        clearTimerStart = null;
+        clearProgress = 0;
+      }
+
+      // ----------------------------------------------------------------------
+      // GESTURE 2: ERASER MODE (PINCH - Thumb & Index close)
+      // ----------------------------------------------------------------------
+      if (pinchDistRel < 0.35) {
+        currentMode = 'ERASING';
+        const thumbTip = { x: (1 - lm[4].x) * width, y: lm[4].y * height };
+        const pinchX = (thumbTip.x + indexTip.x) / 2;
+        const pinchY = (thumbTip.y + indexTip.y) / 2;
+
+        artCtx.save();
+        artCtx.globalCompositeOperation = 'destination-out';
+        artCtx.beginPath();
+        artCtx.arc(pinchX, pinchY, CONFIG.eraserRadius, 0, Math.PI * 2);
+        artCtx.fill();
+        artCtx.restore();
+
+        isDrawing = false;
+        lastDrawX = null;
+        lastDrawY = null;
+        return;
+      }
+
+      // ----------------------------------------------------------------------
+      // GESTURE 3: HOVER MODE (2 FINGERS EXTENDED: Index + Middle)
+      // Pointing 2 fingers moves the cursor around without drawing
+      // ----------------------------------------------------------------------
+      if (isIndexExtended && isMiddleExtended && !isRingExtended && !isPinkyExtended) {
+        currentMode = 'HOVERING';
+        isDrawing = false;
+        lastDrawX = null;
+        lastDrawY = null;
+        return;
+      }
+
+      // ----------------------------------------------------------------------
+      // GESTURE 4: DRAW MODE (1 FINGER EXTENDED: Pointing Index Finger)
+      // Pointing 1 index finger ALWAYS draws!
+      // ----------------------------------------------------------------------
+      if (isIndexExtended && pinchDistRel > 0.35) {
+        currentMode = 'DRAWING';
+        processDrawingStroke(smoothX, smoothY);
+        return;
+      }
+
+      // Default Fallback
+      currentMode = 'HOVERING';
+      isDrawing = false;
+      lastDrawX = null;
+      lastDrawY = null;
+    }
+
+    function processDrawingStroke(x, y) {
+      if (!isDrawing || lastDrawX === null) {
+        isDrawing = true;
+        lastDrawX = x;
+        lastDrawY = y;
+      } else {
+        artCtx.save();
+        artCtx.lineCap = 'round';
+        artCtx.lineJoin = 'round';
+
+        // Outer glow stroke
+        artCtx.strokeStyle = CONFIG.activeColor;
+        artCtx.globalAlpha = 0.3;
+        artCtx.lineWidth = CONFIG.brushSize * 2.0;
+        artCtx.beginPath();
+        artCtx.moveTo(lastDrawX, lastDrawY);
+        artCtx.lineTo(x, y);
+        artCtx.stroke();
+
+        // Core sharp stroke
+        artCtx.globalAlpha = 1.0;
+        artCtx.lineWidth = CONFIG.brushSize;
+        artCtx.beginPath();
+        artCtx.moveTo(lastDrawX, lastDrawY);
+        artCtx.lineTo(x, y);
+        artCtx.stroke();
+
+        artCtx.restore();
+
+        spawnSparks(x, y);
+
+        lastDrawX = x;
+        lastDrawY = y;
+      }
+    }
+
+    /**
+     * ------------------------------------------------------------------------
+     * FALLBACK MOUSE & TOUCH DRAWING SUPPORT
+     * ------------------------------------------------------------------------
+     */
+    let isMouseDown = false;
+
+    window.addEventListener('mousedown', (e) => {
+      if (e.target === mainCanvas && trackingState === 'LOST') {
+        isMouseDown = true;
+        smoothX = e.clientX;
+        smoothY = e.clientY;
+        lastDrawX = e.clientX;
+        lastDrawY = e.clientY;
+        isDrawing = true;
+        currentMode = 'DRAWING';
+      }
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (isMouseDown && trackingState === 'LOST') {
+        smoothX = e.clientX;
+        smoothY = e.clientY;
+        processDrawingStroke(smoothX, smoothY);
+      }
+    });
+
+    window.addEventListener('mouseup', () => {
+      if (isMouseDown) {
+        isMouseDown = false;
+        isDrawing = false;
+        lastDrawX = null;
+        lastDrawY = null;
+      }
+    });
+
+    // Touch Support
+    window.addEventListener('touchstart', (e) => {
+      if (e.touches.length > 0 && trackingState === 'LOST') {
+        isMouseDown = true;
+        smoothX = e.touches[0].clientX;
+        smoothY = e.touches[0].clientY;
+        lastDrawX = smoothX;
+        lastDrawY = smoothY;
+        isDrawing = true;
+        currentMode = 'DRAWING';
+      }
+    }, { passive: true });
+
+    window.addEventListener('touchmove', (e) => {
+      if (isMouseDown && e.touches.length > 0 && trackingState === 'LOST') {
+        smoothX = e.touches[0].clientX;
+        smoothY = e.touches[0].clientY;
+        processDrawingStroke(smoothX, smoothY);
+      }
+    }, { passive: true });
+
+    window.addEventListener('touchend', () => {
+      isMouseDown = false;
+      isDrawing = false;
+      lastDrawX = null;
+      lastDrawY = null;
+    });
+
+    /**
+     * ------------------------------------------------------------------------
+     * 5. DECOUPLED MAIN RENDER LOOP (60+ FPS)
+     * ------------------------------------------------------------------------
+     */
+    function renderLoop(currentTime) {
+      frameCount++;
+      if (currentTime - lastFrameTime >= 500) {
+        const fps = Math.round((frameCount * 1000) / (currentTime - lastFrameTime));
+        fpsVal.textContent = fps;
+        frameCount = 0;
+        lastFrameTime = currentTime;
+      }
+
+      updateStatusBadges();
+
+      const width = mainCanvas.width;
+      const height = mainCanvas.height;
+
+      mainCtx.fillStyle = '#08080c';
+      mainCtx.fillRect(0, 0, width, height);
+
+      if (currentVideoImage && CONFIG.webcamOpacity > 0) {
+        mainCtx.save();
+        mainCtx.globalAlpha = CONFIG.webcamOpacity;
+        mainCtx.translate(width, 0);
+        mainCtx.scale(-1, 1);
+        mainCtx.drawImage(currentVideoImage, 0, 0, width, height);
+        mainCtx.restore();
+      }
+
+      mainCtx.drawImage(artCanvas, 0, 0);
+
+      updateAndRenderParticles();
+
+      // Render Cursors & Overlays
+      if (smoothX !== null && smoothY !== null && (trackingState !== 'LOST' || isMouseDown)) {
+        if (currentMode === 'DRAWING') {
+          renderPenTipCursor(smoothX, smoothY);
+        } else if (currentMode === 'ERASING') {
+          renderEraserCursor(smoothX, smoothY);
+        } else if (currentMode === 'HOVERING') {
+          renderHoverCursor(smoothX, smoothY);
+        } else if (currentMode === 'CLEARING' && currentLandmarks) {
+          const palmX = (1 - currentLandmarks[9].x) * width;
+          const palmY = currentLandmarks[9].y * height;
+          renderProgressRing(palmX, palmY, clearProgress);
+        }
+
+        if (currentLandmarks) {
+          drawHandSkeleton(currentLandmarks);
+        }
+      }
+
+      requestAnimationFrame(renderLoop);
+    }
+
+    requestAnimationFrame(renderLoop);
+
+    /**
+     * ------------------------------------------------------------------------
+     * 6. CURSORS & VISUAL OVERLAYS
+     * ------------------------------------------------------------------------
+     */
+    function updateStatusBadges() {
+      if (trackingState === 'TRACKED') {
+        trackBadge.textContent = 'TRACKED';
+        trackBadge.className = 'track-badge track-tracked';
+      } else if (trackingState === 'EXTRAPOLATING') {
+        trackBadge.textContent = 'EXTRAPOLATING';
+        trackBadge.className = 'track-badge track-extrapolating';
+      } else {
+        trackBadge.textContent = isMouseDown ? 'MOUSE DRAW' : 'LOST';
+        trackBadge.className = isMouseDown ? 'track-badge track-tracked' : 'track-badge track-lost';
+      }
+
+      if (currentMode === 'DRAWING') {
+        modeBadge.textContent = 'DRAWING MODE';
+        modeBadge.className = 'mode-badge mode-drawing';
+      } else if (currentMode === 'ERASING') {
+        modeBadge.textContent = 'ERASER MODE';
+        modeBadge.className = 'mode-badge mode-erasing';
+      } else if (currentMode === 'CLEARING') {
+        modeBadge.textContent = `CLEARING (${Math.round(clearProgress * 100)}%)`;
+        modeBadge.className = 'mode-badge mode-clearing';
+      } else if (currentMode === 'HOVERING') {
+        modeBadge.textContent = 'HOVERING';
+        modeBadge.className = 'mode-badge mode-hovering';
+      } else {
+        modeBadge.textContent = isMouseDown ? 'MOUSE DRAWING' : 'SEARCHING HAND';
+        modeBadge.className = isMouseDown ? 'mode-badge mode-drawing' : 'mode-badge mode-searching';
+      }
+    }
+
+    function spawnSparks(x, y) {
+      for (let i = 0; i < 2; i++) {
+        particles.push({
+          x: x + (Math.random() - 0.5) * 4,
+          y: y + (Math.random() - 0.5) * 4,
+          vx: (Math.random() - 0.5) * 2,
+          vy: (Math.random() - 0.5) * 2 - 1,
+          size: Math.random() * 2.5 + 1.5,
+          color: CONFIG.activeColor,
+          life: 1.0,
+          decay: Math.random() * 0.08 + 0.04
+        });
+      }
+    }
+
+    function updateAndRenderParticles() {
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.x += p.vx;
+        p.y += p.vy;
+        p.life -= p.decay;
+
+        if (p.life <= 0) {
+          particles.splice(i, 1);
+          continue;
+        }
+
+        mainCtx.save();
+        mainCtx.globalAlpha = p.life;
+        mainCtx.fillStyle = p.color;
+        mainCtx.beginPath();
+        mainCtx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
+        mainCtx.fill();
+        mainCtx.restore();
+      }
+    }
+
+    function renderPenTipCursor(x, y) {
+      mainCtx.save();
+      mainCtx.strokeStyle = '#ffffff';
+      mainCtx.lineWidth = 2;
+      mainCtx.beginPath();
+      mainCtx.arc(x, y, CONFIG.brushSize / 2 + 4, 0, Math.PI * 2);
+      mainCtx.stroke();
+
+      mainCtx.fillStyle = CONFIG.activeColor;
+      mainCtx.beginPath();
+      mainCtx.arc(x, y, CONFIG.brushSize / 2 + 1, 0, Math.PI * 2);
+      mainCtx.fill();
+      mainCtx.restore();
+    }
+
+    function renderEraserCursor(x, y) {
+      mainCtx.save();
+      mainCtx.strokeStyle = '#ff0055';
+      mainCtx.lineWidth = 2;
+      mainCtx.setLineDash([6, 6]);
+      mainCtx.beginPath();
+      mainCtx.arc(x, y, CONFIG.eraserRadius, 0, Math.PI * 2);
+      mainCtx.stroke();
+
+      mainCtx.fillStyle = 'rgba(255, 0, 85, 0.15)';
+      mainCtx.fill();
+      mainCtx.restore();
+    }
+
+    function renderHoverCursor(x, y) {
+      mainCtx.save();
+      mainCtx.strokeStyle = '#9d00ff';
+      mainCtx.lineWidth = 1.5;
+      mainCtx.beginPath();
+      mainCtx.arc(x, y, 10, 0, Math.PI * 2);
+      mainCtx.stroke();
+
+      mainCtx.fillStyle = '#ffffff';
+      mainCtx.beginPath();
+      mainCtx.arc(x, y, 2.5, 0, Math.PI * 2);
+      mainCtx.fill();
+      mainCtx.restore();
+    }
+
+    function renderProgressRing(x, y, progress) {
+      mainCtx.save();
+      mainCtx.strokeStyle = '#ffe600';
+      mainCtx.lineWidth = 4;
+      mainCtx.beginPath();
+      mainCtx.arc(x, y, 45, -Math.PI / 2, -Math.PI / 2 + progress * Math.PI * 2);
+      mainCtx.stroke();
+
+      mainCtx.fillStyle = 'rgba(255, 230, 0, 0.15)';
+      mainCtx.beginPath();
+      mainCtx.arc(x, y, 45, 0, Math.PI * 2);
+      mainCtx.fill();
+      mainCtx.restore();
+    }
+
+    function drawHandSkeleton(landmarks) {
+      const width = mainCanvas.width;
+      const height = mainCanvas.height;
+
+      const connections = [
+        [0,1],[1,2],[2,3],[3,4],
+        [0,5],[5,6],[6,7],[7,8],
+        [5,9],[9,10],[10,11],[11,12],
+        [9,13],[13,14],[15,16],[13,17],
+        [17,18],[18,19],[19,20],[0,17]
+      ];
+
+      mainCtx.save();
+      mainCtx.strokeStyle = 'rgba(0, 243, 255, 0.35)';
+      mainCtx.lineWidth = 1.5;
+
+      for (const [i, j] of connections) {
+        if (!landmarks[i] || !landmarks[j]) continue;
+        const x1 = (1 - landmarks[i].x) * width;
+        const y1 = landmarks[i].y * height;
+        const x2 = (1 - landmarks[j].x) * width;
+        const y2 = landmarks[j].y * height;
+
+        mainCtx.beginPath();
+        mainCtx.moveTo(x1, y1);
+        mainCtx.lineTo(x2, y2);
+        mainCtx.stroke();
+      }
+
+      for (let i = 0; i < landmarks.length; i++) {
+        const x = (1 - landmarks[i].x) * width;
+        const y = landmarks[i].y * height;
+
+        mainCtx.fillStyle = (i === 8) ? '#00f3ff' : 'rgba(255, 255, 255, 0.7)';
+        mainCtx.beginPath();
+        mainCtx.arc(x, y, (i === 8) ? 4 : 2, 0, Math.PI * 2);
+        mainCtx.fill();
+      }
+
+      mainCtx.restore();
+    }
+
+    /**
+     * ------------------------------------------------------------------------
+     * 7. CONTROL PANEL EVENT BINDINGS
+     * ------------------------------------------------------------------------
+     */
+    colorBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        colorBtns.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        CONFIG.activeColor = btn.getAttribute('data-color');
+      });
+    });
+
+    brushSlider.addEventListener('input', (e) => {
+      CONFIG.brushSize = parseInt(e.target.value, 10);
+      brushVal.textContent = `${CONFIG.brushSize}px`;
+    });
+
+    feedSlider.addEventListener('input', (e) => {
+      const val = parseInt(e.target.value, 10);
+      CONFIG.webcamOpacity = val / 100;
+      feedVal.textContent = `${val}%`;
+    });
+
+    clearBtn.addEventListener('click', () => {
+      artCtx.clearRect(0, 0, artCanvas.width, artCanvas.height);
+    });
+
+    saveBtn.addEventListener('click', () => {
+      const snapCanvas = document.createElement('canvas');
+      snapCanvas.width = mainCanvas.width;
+      snapCanvas.height = mainCanvas.height;
+      const snapCtx = snapCanvas.getContext('2d');
+
+      snapCtx.fillStyle = '#08080c';
+      snapCtx.fillRect(0, 0, snapCanvas.width, snapCanvas.height);
+      snapCtx.drawImage(artCanvas, 0, 0);
+
+      const link = document.createElement('a');
+      link.download = `air-canvas-art-${Date.now()}.png`;
+      link.href = snapCanvas.toDataURL('image/png');
+      link.click();
+    });
+  </script>
+</body>
+</html>
